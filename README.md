@@ -6,6 +6,8 @@
 メッシュ オブジェクトを KiCad 用の WRL ファイルにエクスポートします。<br>
 スクリプトのインターフェイス言語は日本語です。
 
+動作は、Blender 3.6、及び、4.0.2 で確認しています。
+
 Exporter from Blender to VRML2 file (.wrl) that can be used for KiCad.<br>
 The interface language for the script is Japanese.
 
