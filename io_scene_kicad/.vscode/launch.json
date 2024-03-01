@@ -1,0 +1,11 @@
+{
+    "name": "Blender Addon debugging",
+    "type": "python",
+    "request": "launch",
+    "program": "C:\\Program Files\\Blender Foundation\\Blender 4.0\blender.exe",
+    "cwd": "C:\\Users\\user\\AppData\\Roaming\\Blender Foundation\\Blender\\4.0\\scripts\\addons",
+    "args": [
+        "--python",
+        "c:\\Users\\user\\.vscode\\extensions\\cgpython.blender-development-experimental-fork-0.0.183\\pythonFiles\\launch.py"
+    ]
+}

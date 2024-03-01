@@ -26,360 +26,462 @@ import os
 import re
 from bpy_extras import object_utils
 from . import localeui
+from . import bautils
+
+# DEBUG = False
+DEBUG = True
 
 
-# マテリアルのベースカラーを取得
 # ================================================================================================================================
-def get_material_base_color(mat=None):
-    # 戻り値の初期化
-    base_color = (1, 1, 1)
-    alpha_value = 1
-    # アルファブレンドの有無取得
-    alpha_blend = False
-    if mat.blend_method == 'BLEND':
-        alpha_blend = True
+class MeshExporter:
 
-    # マテリアルがノードを使用しているとき
-    if mat.use_nodes:
-        # BSDFを検索
-        for node in mat.node_tree.nodes:
-            if node.type[0:4] != 'BSDF':
+    global_matrix: None
+    global_scale: None
+    local_matrix: None
+    local_origin: None
+    use_selection: False
+    use_worigin_to_center: False
+    use_mesh_modifiers: True
+    fetch_children: False
+    color_mag: 1.5000
+    # 単独シンボル生成時のコレクション（ワールド原点が中心）
+    target_objs: list
+    # 原点別のコレクション
+    origin_objs: dict
+    fw: bautils.FW
+
+    # ------------------------------------------------------------------------------------------------
+    def __init__(self):
+        pass
+
+    # 変換対象のオブジェクトか否かを取得
+    # ------------------------------------------------------------------------------------------------
+    def avail_obj(self, obj, skipSelection=False):
+        # メッシュでないとき
+        if obj.type != 'MESH':
+            return False
+        # オブジェクトが非表示のとき
+        if not obj.visible_get():
+            return False
+        # 選択をスキップしない指示で、[選択のみ]チェックでオブジェクトが未選択のとき
+        if (not skipSelection) and self.use_selection and (not obj.select_get()):
+            return False
+        return True
+
+    # ------------------------------------------------------------------------------------------------
+    def avail_objs(self, objs, skipSelection=False):
+        for obj in objs:
+            if not self.avail_obj(obj, skipSelection=skipSelection):
                 continue
-            # アルファブレンド有効でプリンシパルBSDFのノードのとき
-            if alpha_blend and (node.type == 'BSDF_PRINCIPLED'):
-                # #4番目のα値を取得する
-                alpha_value = float(node.inputs[4].default_value)
-            # ノードの値探索
-            for io in node.inputs:
-                # default_value 属性が無効のとき
-                if not hasattr(io, 'default_value'):
-                    # スキップ
-                    continue
-                # クラスタイプが配列以外はスキップ
-                if str(type(io.default_value))[8:-2] != 'bpy_prop_array':
-                    continue
-                # 3つの要素（ベースカラー）を取得
-                base_color = io.default_value[0:3]
-                # 処理終了
-                break
-    # ベースからとα値を返す
-    return (base_color, alpha_value)
+            yield obj
 
-# 基本色に倍率をかけて返す
-# base_color 元の色
-# zoom_color 各色別の比率(0～1)
-# color_mag ベースカラーの増幅率
-# 戻り値の下限値
-# ================================================================================================================================
-def zoom_color(base_color, zoom_color, color_mag, under=0.01, caption=""):
-    # 戻り値の初期化
-    ret_color = [0, 0, 0]
-    # ベースカラーの各要素にアクセス
-    for inx in range(len(base_color)):
-        # 要素の色値取得
-        color = float(base_color[inx])
-        # 下限値より小さいなら
-        if color < under:
-            # 下限を設定
-            color = under
-        # 色倍数で乗算
-        color *= color_mag
-        # 色別比で乗算
-        color *= float(zoom_color[inx])
-        # 戻り値に格納
-        ret_color[inx] = color
-    # デバッグ:
-    print("%s: base[%s], zoom[%s] => ret[%s]" % \
-        (caption, ' '.join(map(str, base_color)), ' '.join(map(str, zoom_color)), ' '.join(map(str, ret_color))))
-    # 計算後のカラーを返す
-    return tuple(ret_color)
+    # 親オブジェクト取得
+    # ------------------------------------------------------------------------------------------------
+    def parent_get(self, obj):
+        target = obj
+        while not target.parent is None:
+            target = target.parent
+        loc, rot, scale = target.matrix_world.decompose()
+        # 親オブジェクト, objが誰かの子かどうか, 位置情報
+        return (target, True if target != obj else False, mathutils.Vector(loc))
 
-# ファイルライター
-# 出力内容の括弧類に合わせてインデントを自動生成します。
-# ================================================================================================================================
-class FW:
-    def __init__(self, file):
-        # インデント初期レベル
-        self.indent = 0
-        # ファイル設定
-        self.file = file
-
-    # ファイル出力
-    # data: 出力文字列
-    # ofs: 一時的に加算するインデントレベル
-    def print(self, data="", ofs=0):
-        # アンインデント判定
-        if re.search(r"[\]})]+", data):
-            self.indent -= 1
-        # インデント文字列生成
-        prefix = (self.indent + ofs) * "\t"
-        # 出力
-        self.file.write(prefix + data)
-        # インデント判定
-        if re.search(r"[\[{(]+", data):
-            self.indent += 1
-
-    # 改行付ファイル出力
-    # data: 出力文字列
-    # ofs: 一時的に加算するインデントレベル
-    def println(self, data="", ofs=0):
-        self.print(data + "\n", ofs=ofs)
-
-# 反復子操作
-# ================================================================================================================================
-class ItOp:
-    def __init__(self, items=None):
-        self.count = 0
-        # 第2引数が有効なとき
-        if not items is None:
-            # 第2引数がリストのとき
-            if type(items) is list:
-                # リスト長をカウンタに設定
-                self.count = len(items)
-            # 第2引数が整数のとき
-            elif type(items) is int:
-                # 整数値をカウンタに設定
-                self.count = int(items)
-        # リセット時のカウンタを設定
-        self.maxcount = self.count
-
-    # 反復呼び出しのエントリ(1反復毎にCALLしてカウンタを減算する)
-    def entry(self):
-        self.count -= 1
-
-    # カウンタのリセット
-    def reset(self):
-        # 反復数が0に達しているとき
-        if self.count == 0:
-            # 初期値に戻す
-            self.count = self.maxcount
-
-    # 末尾判定
-    def get_last(self, last=",", empty=""):
-        if self.count > 0:
-            return last
-        return empty
-
-# オブジェクトモードの切り替え
-# ================================================================================================================================
-class ObjectModeApply:
-
-    def __init__(self, obj, apply=True):
-        # 編集モード状態取得
-        self.is_editmode = (obj.mode == 'EDIT')
-        if apply:
-            self.store()
+    # オブジェクトの子オブジェクトを収集
+    # ------------------------------------------------------------------------------------------------
+    def children_get(self, obj):
+        collect = []
+        # 子オブジェクトを対象とするとき
+        # ※子オブジェクトを選択時はcontext.selected_objectsに含まれるのでここではチェックしない
+        if self.fetch_children:
+            for child in obj.children:#_recursive:
+                # 収集対象オブジェクトのとき
+                if self.avail_obj(child):
+                    # リストに追加
+                    collect.append(child)
+        # 収集したリストを返す
+        return collect
     
-    def store(self):
-        # 編集モードならモードを戻す
-        if self.is_editmode:
-            bpy.ops.object.editmode_toggle()
-
-    def restore(self):
-        # 編集モードならモードを戻す
-        if self.is_editmode:
-            bpy.ops.object.editmode_toggle()
-
-# BMesh の保存
-# ================================================================================================================================
-def save_bmesh(
-    fw: FW,         # ファイルライター
-    bm,             # 対象のBMesh
-    materials,      # マテリアル群
-    color_mag,      # 色倍率
-    last            # 継続記号（',' or ''）
-    ):
-
-    # シェイプ定義開始
-    fw.println('Shape {')
-    # ※マテリアル定義が無くてもmaterial記述を生成しないとKiCadはモデルを表示しない。
-    fw.println('appearance Appearance {')
-    fw.println('material Material {')
-
-    # マテリアル定義があるとき
-    if len(materials) > 0:
-
-        # ライト設定があるとき
-        if not bpy.data.worlds[0].light_settings is None:
-            # ライト設定のao_factorを取得
-            ao_factor = bpy.data.worlds[0].light_settings.ao_factor
-        # ライト設定がないとき
-        else:
-            # α値は1固定
-            ao_factor = 1.0
-
-        # 最初のマテリアルのみエクスポート（サブメッシュ毎に1つのマテリアルに制限）
-        for m in materials:
-            if m is None:
-                continue
-            base_color = (1, 1, 1)  # White
-            alpha_value = 1
-            # ノードを使用するとき
-            if m.use_nodes:
-                # ノードからα値を取得（プリンシパルBSDFのアルファ値取得）
-                base_color,alpha_value = get_material_base_color(m)
-
-            # マテリアル名(※日本語名は KiCad が認識しない)
-            fw.println('# Material %r, %s' % (materialid(m.name), vrmlid(m.name)))
-            # 拡散反射色
-            fw.println("diffuseColor %.3g %.3g %.3g" % zoom_color(base_color, m.diffuse_color, color_mag, caption=" diffuse"))
-            # 光源反射色
-            fw.println("emissiveColor %.3g %.3g %.3g" % zoom_color(base_color, [0.3, 0.3, 0.3], color_mag, caption="emissive"))
-            # 鏡面反射色
-            fw.println("specularColor %.3g %.3g %.3g" % zoom_color(base_color, m.specular_color, color_mag, caption="specular"))
-            # 環境光反射率
-            fw.println("ambientIntensity %.3g" % ao_factor)
-            # 透過率
-            fw.println("transparency %.3g" % (1 - alpha_value))
-            # 鏡面反射率
-            fw.println("shininess %.3g" % m.specular_intensity)
-            # 1つのマテリアル生成後終了
-            break
-    else:
-        fw.println("# No material definition.")
-
-    fw.println('}')  # end 'Material'
-    fw.println('}')  # end 'Appearance'
-
-    fw.println('geometry IndexedFaceSet {')
-    fw.println('coord Coordinate {')
-    fw.println('point [')
-
-    # 座標列の生成
-    v = None
-    nl_ok = False
-
-    # 反復操作オブジェクト生成
-    itverts = ItOp(bm.verts)            # データ終端判定の指定
-
-    for v in bm.verts:
-
-        # 反復操作エントリ
-        itverts.entry()
-
-        # 丸め誤差をゼロにスナップする
-        if abs (v.co[0]) < 0.00001:
-            v.co[0] = 0
-        if abs (v.co[1]) < 0.00001:
-            v.co[1] = 0
-        if abs (v.co[2]) < 0.00001:
-            v.co[2] = 0
-
-        # カンマと改行文字制御
-        set_sep = itverts.get_last()
-
-        fw.println("%.6g %.6g %.6g%s" % \
-           (v.co[0], v.co[1], v.co[2], set_sep))
-
-    del v
-    fw.println(']')  # end point[]
-    fw.println('}')  # end Coordinate
-
-    # 座標インデックスの列生成
-    fw.println('coordIndex [')
-    f = fv = None
-    itfaces = ItOp(bm.faces)
-    for f in bm.faces:
-
-        fv = f.verts[:]
-
-        # カンマと改行文字制御
-        set_sep = itfaces.get_last()
-
-        fw.println("%d, %d, %d, -1%s" % \
-            (fv[0].index, fv[1].index, fv[2].index, set_sep))
-
-    del f, fv
-    fw.println(']')  # end 'coordIndex[]'
-    fw.println('}')  # end 'IndexedFaceSet'
-
-    fw.println('}%s' % (last))  # end 'Shape'
-
-
 # メッシュへのマトリクス適用
-# ================================================================================================================================
-def mesh_apply(bm, obj, global_matrix):
-    # 回転
-    mat_rot_x = mathutils.Matrix.Rotation(obj.rotation_euler[0], 4, 'X')
-    mat_rot_y = mathutils.Matrix.Rotation(obj.rotation_euler[1], 4, 'Y')
-    mat_rot_z = mathutils.Matrix.Rotation(obj.rotation_euler[2], 4, 'Z')
-    mat_rot = mat_rot_x @ mat_rot_y @ mat_rot_z
-    # スケール
-    mat_sca_x = mathutils.Matrix.Scale(obj.scale[0], 4, (1, 0, 0))
-    mat_sca_y = mathutils.Matrix.Scale(obj.scale[1], 4, (0, 1, 0))
-    mat_sca_z = mathutils.Matrix.Scale(obj.scale[2], 4, (0, 0, 1))
-    mat_sca = mat_sca_x @ mat_sca_y @ mat_sca_z
-    # マトリクス展開
-    mat_out = mat_rot @ mat_sca @ global_matrix @ obj.matrix_world
-    # マトリクス適用
-    bm.transform(mat_out)
+    # ------------------------------------------------------------------------------------------------
+    def bmesh_locRotScale(self, bm, obj):
+        # glb_mat = obj.matrix_world  # 表示はOK.位置とスケールがNG
+        mtx = self.local_origin @ obj.matrix_world @ self.local_matrix
+        # マトリクスから位置・回転・スケールを取得
+        loc, rot, sca = mtx.decompose()
+        assert(type(loc) is mathutils.Vector)
+        assert(type(rot) is mathutils.Quaternion)
+        assert(type(sca) is mathutils.Vector)
+        # VRMLでは移動量にスケールする必要あり
+        loc *= sca
+        # tupleに変換(rotationはQuaternionからEulerに置換)
+        locs = bautils.from_tuples(loc)
+        rots = bautils.from_tuples(rot)
+        scas = bautils.from_tuples(sca)
+        for loc in locs:
+            self.fw.println("translation %g %g %g" % loc)
+        for rot in rots:
+            self.fw.println("rotation %g %g %g %g" % rot)
+        for sca in scas:
+            self.fw.println("scale %g %g %g" % sca)
+        # self.fw.println("bboxCenter %g %g %g" % from_tuple(self.local_origin))
+        # VRML上でトランスフォームするのでBMeshのトランスフォームは不要。
+        ## bm.transform(glb_mat)
 
-# オブジェクトの保存
-# ================================================================================================================================
-def save_object(fw, global_matrix,
-                scene, obj,
-                use_mesh_modifiers,
-                color_mag,
-                last
-                ):
+    # Materialの保存
+    # ------------------------------------------------------------------------------------------------
+    def save_materials(self, obj, materials):
 
-    # ※オブジェクトはメッシュ必須
-    assert(obj.type == 'MESH')
+        # ※マテリアル定義が無くてもmaterial記述を生成しないとKiCadはモデルを表示しない。
+        self.fw.println('appearance Appearance {')
+        self.fw.println('material Material {')
+        # マテリアル定義があるとき
+        if len(materials) > 0:
+            # ライト設定があるとき
+            if not bpy.data.worlds[0].light_settings is None:
+                # ライト設定のao_factorを取得
+                ao_factor = bpy.data.worlds[0].light_settings.ao_factor
+            # ライト設定がないとき
+            else:
+                # α値は1固定
+                ao_factor = 1.0
 
-    # モディファイアを適用するとき
-    if use_mesh_modifiers:
+            # 最初のマテリアルのみエクスポート（サブメッシュ毎に1つのマテリアルに制限）
+            maters = bautils.ItOp(materials)
+            for m in maters.loop(lambda o: not o is None):
+                base_color = (1, 1, 1)  # White
+                alpha_value = 1
+                # ノードを使用するとき
+                if m.use_nodes:
+                    # ノードからα値を取得（プリンシパルBSDFのアルファ値取得）
+                    base_color, alpha_value = bautils.get_material_base_color(m)
 
-        # オブジェクトモードへ移行
-        mode_state = ObjectModeApply(obj, True)
+                # マテリアル名(※日本語名は KiCad が認識しない)
+                self.fw.println('# Material %r, %s' % (bautils.materialid(m.name), bautils.vrmlid(m.name)))
+                # 拡散反射色
+                self.fw.println("diffuseColor %.3g %.3g %.3g" % bautils.zoom_color(base_color, m.diffuse_color, self.color_mag, caption=" diffuse"))
+                # 光源反射色
+                self.fw.println("emissiveColor %.3g %.3g %.3g" % bautils.zoom_color(base_color, [0.3, 0.3, 0.3], self.color_mag, caption="emissive"))
+                # 鏡面反射色
+                self.fw.println("specularColor %.3g %.3g %.3g" % bautils.zoom_color(base_color, m.specular_color, self.color_mag, caption="specular"))
+                # 環境光反射率
+                self.fw.println("ambientIntensity %.3g" % ao_factor)
+                # 透過率
+                self.fw.println("transparency %.3g" % (1 - alpha_value))
+                # 鏡面反射率
+                self.fw.println("shininess %.3g" % m.specular_intensity)
+                # 1つのマテリアル生成後終了
+                break
+        else:
+            self.fw.println("# No material definition.")
 
-        # 仮にプレビューでモディファイヤを適用する
-        dg = bpy.context.evaluated_depsgraph_get()
-        me = obj.to_mesh(preserve_all_data_layers=True, depsgraph=dg)
+        self.fw.println('}')  # end 'Material'
+        self.fw.println('}')  # end 'Appearance'
 
-        # モディファイヤを適用したオブジェクトのコピーを作成
-        bm = bmesh.new()
-        bm.from_mesh(me)
-        #obj.to_mesh_clear() #<-これやらないよ
+    # BMesh の保存
+    # ------------------------------------------------------------------------------------------------
+    def save_bmesh(self,
+            bm,             # 対象のBMesh
+            obj,            # オブジェクト
+            materials       # マテリアル群
+            ):
 
-        # 編集モードの復元
-        mode_state.restore()
-    else:
-        me = obj.data
+        self.fw.println("# %r (%s)" % (obj.name, bautils.vrmlid(obj.name)), ofs=1)
+        self.fw.println('Transform {')
+
+        self.bmesh_locRotScale(bm, obj)
+
+        self.fw.println('children [')
+        self.fw.println('Shape {')
+
+        self.save_materials(obj, materials)
+
+        self.fw.println('geometry IndexedFaceSet {')
+        self.fw.println('coord Coordinate {')
+        self.fw.println('point [')
+
+        # 座標列の生成
+        v = None
+        # 反復操作オブジェクト生成
+        itverts = bautils.ItOp(bm.verts)    # データ終端判定の指定
+        for v in itverts.loop():
+
+            # 丸め誤差をゼロにスナップする
+            v.co[0] = 0 if abs(v.co[0]) < 0.00001 else v.co[0]
+            v.co[1] = 0 if abs(v.co[1]) < 0.00001 else v.co[1]
+            v.co[2] = 0 if abs(v.co[2]) < 0.00001 else v.co[2]
+
+            self.fw.println("%.6g %.6g %.6g%s" % \
+                (v.co[0], v.co[1], v.co[2], itverts.last_get()))
+
+            del v
+
+        self.fw.println(']')  # end 'point'
+        self.fw.println('}')  # end 'Coordinate'
+
+        # 座標インデックスの列生成
+        self.fw.println('coordIndex [')
+        f = fv = None
+        itfaces = bautils.ItOp(bm.faces)
+        for f in itfaces.loop():
+
+            fv = f.verts[:]
+
+            self.fw.println("%d, %d, %d, -1%s" % \
+                (fv[0].index, fv[1].index, fv[2].index, itfaces.last_get()))
+
+            del f, fv
+
+        self.fw.println(']')     # end 'coordIndex'
+        self.fw.println('}')     # end 'IndexedFaceSet'
+
+        self.fw.println('}')     # end 'Shape'
+        self.fw.println(']')     # end 'children'
+        self.fw.print('}')       # end 'Transform'
+   
+
+    # オブジェクトの保存
+    # ------------------------------------------------------------------------------------------------
+    def save_object(self, obj):
+
+        # ※オブジェクトはメッシュ必須
+        assert(obj.type == 'MESH')
+
+        # 選択済みオブジェクトの選択解除
+        sel = bautils.Selector()
+        # 複製オブジェクトのインスタンス兼リリースフラグ
+        rel_obj = None
+
+        # モディファイアを適用するとき
+        if self.use_mesh_modifiers:
+            # オブジェクトモードへ移行
+            mode_state = bautils.ObjectModeApply(obj, True)
+            # 対象オブジェクトの選択設定
+            state = sel.set_select(obj)
+            # 変換->メッシュでモディファイヤを適用したオブジェクトを生成する
+            bpy.ops.object.convert(target='MESH', keep_original=True)
+            # モディファイヤ適用後の複製されたメッシュを取得
+            rel_obj = bpy.context.active_object
+            # メッシュ参照
+            me = rel_obj.data
+            # 選択状態復元
+            sel.restore_select(obj, state)
+            # 編集モードの復元
+            mode_state.restore()
+        else:
+            # メッシュ参照
+            me = obj.data
+
         # 編集モードのとき
         if obj.mode == 'EDIT':
             # 編集状態のメッシュからBMeshを取得
             bm_orig = bmesh.from_edit_mesh(me)
             bm = bm_orig.copy()
         else:
+            # BMesh を作成
             bm = bmesh.new()
             bm.from_mesh(me)
 
-    # 変換前に三角形分割を行う（変換後に行うと失敗する。2.7以前）
-    bmesh.ops.triangulate(bm, faces=bm.faces)
+        # 変換前に三角形分割を行う（変換後に行うと失敗する。2.7以前）
+        bmesh.ops.triangulate(bm, faces=bm.faces)
+        # BMeshの保存
+        self.save_bmesh(bm, obj, me.materials)
+        # BMesh インスタンス解放
+        bm.free()
 
-    # ワールド座標系でのマトリックス成分取得
-    loc, rot, scale = obj.matrix_world.decompose()
+        # 複製されたオブジェクトがあるとき
+        if not rel_obj is None:
+            # 複製オブジェクトを選択して削除
+            sel.set_select(rel_obj)
+            bpy.ops.object.delete(use_global=True, confirm=False)
+            rel_obj = None
 
-    # マトリックス適用
-    mesh_apply(bm, obj, global_matrix)
+        # 選択済みオブジェクトの選択復元
+        sel.restore_select_all()
 
-    # BMeshの保存
-    save_bmesh(fw, bm, me.materials, color_mag, last)
+    # ------------------------------------------------------------------------------------------------
+    def save_objects(self, objects):
 
-    # BMesh インスタンス解放
-    bm.free()
+            # プリミティブ定義開始
+            self.fw.println()
+            self.fw.println("Group {")
+            self.fw.println("children [")
 
-# オブジェクトIDを VRML用に変換
-# ================================================================================================================================
-def vrmlid(n):
-    return '_' + n.replace ('.', '_').replace (' ','_')
+            obj = None
+            itobj = bautils.ItOp(objects)
+            # メッシュで表示以外はスキップ
+            for obj in itobj.loop(lambda o: o.type == 'MESH' and o.visible_get()):
 
-# マテリアル名をVRML用に変換
-# ================================================================================================================================
-# VRML との互換性を保つためにマテリアル名を変換しますが、先頭の '_' がない場合は、
-# wrl を再インポートしてマテリアル名を保持する可能性がある
-def materialid(n):
-    return n.replace ('.', '_').replace (' ','-')
+                # オブジェクトの保存
+                self.save_object(obj)
+
+                # end 'Shape'
+                self.fw.println('%s' % (itobj.last_get()))
+
+                del obj
+
+            # プリミティブ定義終了
+            self.fw.println("]")
+            self.fw.println("}")
+
+    # ファイルに出力
+    # ------------------------------------------------------------------------------------------------
+    def save_to_file(self, filepath, objects):
+        file = None
+        try:
+            # ファイルを開く
+            file = open(filepath, 'w', encoding='utf-8')
+
+            # ファイルライター作成
+            self.fw = bautils.FW(file)
+
+            # VRML2 エントリ書込み
+            self.fw.println('#VRML V2.0 utf8')
+            self.fw.println('#modeled using blender3d http://blender.org')
+
+            # オブジェクトの保存
+            self.save_objects(objects)
+
+        except FileNotFoundError as e:
+            pass
+        finally:
+            if not file is None:
+                file.close()
+
+    # コレクション収集
+    # ------------------------------------------------------------------------------------------------
+    def target_collect(self, *args):
+        for target in args:
+            if type(target) is tuple or type(target) is list:
+                for child in target:
+                    if not child in self.target_objs:
+                        self.target_objs.append(child)
+            else:
+                if not target in self.target_objs:
+                    self.target_objs.append(target)
+
+    # 位置情報別のコレクション収集
+    # ------------------------------------------------------------------------------------------------
+    def location_map_collect(self, location, *args, subkey=None):
+        # 位置情報(恐らくVector)をタプルに置換
+        loc = tuple(location)
+        # サブキー指定ありのとき
+        if not subkey is None:
+            # 位置情報が未登録のとき
+            if not loc in self.origin_objs:
+                # 位置情報要素の空辞書を登録
+                self.origin_objs[loc] = {}
+            # サブキー要素が未登録のとき
+            if not subkey in self.origin_objs[loc]:
+                # サブキー要素の空リストを登録
+                self.origin_objs[loc][subkey] = []
+            for target in args:
+                # ターゲットがtuple/listのいずれかのとき
+                if type(target) is tuple or type(target) is list:
+                    for child in target:
+                        # オブジェクトが未登録のとき
+                        if not child in self.origin_objs[loc][subkey]:
+                            self.origin_objs[loc][subkey].append(child)
+                # ターゲットがtuple/listの何れもなく、オブジェクトが未登録のとき
+                elif not target in self.origin_objs[loc][subkey]:
+                    self.origin_objs[loc][subkey].append(target)
+        # サブキー指定なしのとき
+        else:
+            # 位置情報が未登録のとき
+            if not loc in self.origin_objs:
+                # 位置情報要素の空リストを登録
+                self.origin_objs[loc] = []
+
+            for target in args:
+                # ターゲットがtuple/listのいずれかのとき
+                if type(target) is tuple or type(target) is list:
+                    for child in target:
+                        # サブキー指定なしでオブジェクトが未登録のとき
+                        if not child in self.origin_objs[loc]:
+                            self.origin_objs[loc].append(child)
+                # ターゲットがtuple/listの何れもなく、オブジェクトが未登録のとき
+                elif not target in self.origin_objs[loc]:
+                    self.origin_objs[loc].append(target)
+
+    # ------------------------------------------------------------------------------------------------
+    def collector(self, context):
+          
+        # 収集コレクションの初期化
+        self.target_objs = []
+        self.origin_objs = {}
+
+        # 全オブジェクトを登録リストに追加
+        it_objs = bautils.ItOp(context.scene.objects)
+        for obj in it_objs.loop(lambda o: self.avail_obj(o)):
+            # 対象外はスキップ(メッシュ and 表示 and ([選択のみ]なしor[選択のみ]で選択済))
+            # if not self.avail_obj(obj):
+            #     continue
+            # 親オブジェクトを取得
+            parent_obj, is_child, parent_loc = self.parent_get(obj)
+            # 子オブジェクトを取得
+            children = self.children_get(obj)
+            # objは子オブジェクトであるとき
+            if is_child:
+                # ワールド原点を中心とするとき
+                if  self.use_worigin_to_center:
+                    # 親が収集対象に該当するとき
+                    if self.avail_obj(parent_obj):
+                        # 親オブジェクトを収集
+                        self.target_collect(parent_obj)
+                    self.target_collect(obj, children)
+                else:
+                    # 親が収集対象に該当するとき
+                    if self.avail_obj(parent_obj):
+                        # 親オブジェクトを収集
+                        self.location_map_collect(parent_loc, parent_obj)
+                    self.location_map_collect(parent_loc, obj, children)
+            # オブジェクトが最上位オブジェクトであるとき
+            else:
+                # ワールド原点を中心とするとき
+                if  self.use_worigin_to_center:
+                    # 子オブジェクト対象以外、かつ、選択のみでobjが未選択のとき
+                    if (not self.fetch_children) and self.use_selection and (not obj.select_get()):
+                        # スキップ
+                        continue
+                    self.target_collect(obj, children)
+                else:
+                    self.location_map_collect(parent_loc, obj, children)
+
+    # エクスポート実行
+    # ------------------------------------------------------------------------------------------------
+    def execute(self, operator, filepath):
+        # マトリクス設定
+        self.local_matrix = self.global_matrix * self.global_scale
+        # 平行移動量初期値（移動なし）
+        self.local_origin = mathutils.Matrix.Translation((0, 0, 0))
+        # ワールド原点を中心とするオブジェクト収集があるとき
+        if len(self.target_objs) > 0:
+            self.save_to_file(filepath, self.target_objs)
+            # 完了メッセージ差k製
+            completed_msg = localeui.gtext("CompletedOutput", "%s の出力を完了しました。")
+            # レポート出力
+            operator.report({'INFO'}, completed_msg % (filepath))
+        else:
+            # 原点別オブジェクトの出力
+            cfiles = 0
+            msgs = []
+            for origin in self.origin_objs:
+                # 平行移動量
+                self.local_origin = mathutils.Matrix.Translation(-mathutils.Vector(origin))
+                # モデルのオブジェクトリストを取得
+                collect = self.origin_objs[origin]
+                # オブジェクト名でソート
+                sublist = sorted(collect, key=lambda o: o.name)
+                # 生成ファイルパスの取得
+                subpath = bautils.get_subpath(filepath, sublist[0].name)
+                # ファイルへ保存
+                self.save_to_file(subpath, collect)
+                cfiles = cfiles + 1
+                proceeded_msg = localeui.gtext("ProceededOutput", "%s を出力しました。")
+                msgs.append(proceeded_msg % (os.path.basename(subpath)))
+            # 完了メッセージ差k製
+            count_msg = localeui.gtext("CompletedCountOutput", "件のファイル出力を完了しました。")
+            msgs.append(count_msg % (cfiles))
+            # レポート出力
+            operator.report({'INFO'}, '\n'.join(msgs))
 
 # エクスポートメインエントリ
 # ================================================================================================================================
@@ -387,112 +489,25 @@ def save(operator,
          context,
          filepath="",
          global_matrix=None,
+         global_scale=None,
          use_selection=False,
+         use_worigin_to_center=False,
          use_mesh_modifiers=True,
-         use_origin_to_center=True,
-         global_mag=1.5000):
+         fetch_children=False,
+         color_mag=1.5000):
 
-    # シーンの取得
-    scene = context.scene
+    mexp = MeshExporter()
+    mexp.global_matrix = global_matrix
+    mexp.global_scale = global_scale
+    mexp.use_selection = use_selection
+    mexp.use_worigin_to_center = use_worigin_to_center
+    mexp.use_mesh_modifiers = use_mesh_modifiers
+    mexp.fetch_children = fetch_children
+    mexp.color_mag = color_mag
 
-    # 選択のみが有効なとき
-    if use_selection:
-        # 選択済みオブジェクトを取得
-        objects = context.selected_objects
-    else:
-        # シーン全てのオブジェクトを取得
-        objects = scene.objects
-
-    # [原点を中心にする]オプション指定のとき
-    if use_origin_to_center:
-        # 選択したオブジェクトの最上位の親を検索します
-        top = None
-        toploc = None
-        for obj in objects:
-            # メッシュ以外はスキップ
-            if obj.type != 'MESH':
-                continue
-            # 非表示オブジェクトはスキップ
-            if not obj.visible_get():
-                continue
-
-            # 最上位のオブジェクトを取得
-            cur = obj
-            while not (cur.parent is None):
-                cur = cur.parent
-            loc, rot, scale = cur.matrix_world.decompose()
-
-            if top == None:
-                top = cur
-                toploc = loc
-            elif (top != cur) and (toploc != loc):
-                toploc = toploc[:]
-                loc = loc[:]
-                msg = localeui.gtext("ObjectsWithDifferentOriginsWereFound")
-                operator.report ({'ERROR'}, msg % (top.name, cur.name, toploc [0], toploc [1], toploc [2], loc [0], loc [1], loc [2]))
-                # 処理を中止する
-                return {'CANCELLED'}
-
-        # 最上位オブジェクトがあるとき
-        if not (top is None):
-            # 最上位オブジェクトの位置を原点移動
-            global_matrix = global_matrix @ mathutils.Matrix.Translation (-toploc)
-
-    file = None
-    try:
-        # ファイルを開く
-        file = open(filepath, 'w', encoding='utf-8')
-
-        # ファイルライター作成
-        fw = FW(file)
-
-        # VRML2 エントリ書込み
-        fw.println('#VRML V2.0 utf8')
-        fw.println('#modeled using blender3d http://blender.org')
-
-        # プリミティブ定義開始
-        fw.println()
-        fw.println("Group {")
-        fw.println("children [")
-
-        obj = None
-        itobj = ItOp(objects)
-        for obj in objects:
-            # 反復操作エントリ
-            itobj.entry()
-
-            # 末尾文字取得
-            last = itobj.get_last(",")
-
-            # メッシュ以外はスキップ
-            if (obj.type != 'MESH'):
-                continue
-
-            # 非表示オブジェクトはスキップ
-            if not obj.visible_get():
-                continue
-
-            # オブジェクトの名称出力
-            fw.println()
-            fw.println("# %r (%s)" % (obj.name, vrmlid (obj.name)), ofs=1)
-
-            # オブジェクトの保存
-            save_object(fw, global_matrix, scene, obj, use_mesh_modifiers, global_mag, last)
-
-        # プリミティブ定義終了
-        fw.println("]")
-        fw.println("}")
-
-    except FileNotFoundError as e:
-        pass
-    finally:
-        if not file is None:
-            file.close()
-
-    msg = localeui.gtext("CompletedOutput", "%s の出力を完了しました。")
-    operator.report({'INFO'}, msg % (filepath))
+    mexp.collector(context)
+    mexp.execute(operator, filepath)
 
     return {'FINISHED'}
-
 
 # ================================================================================================================================

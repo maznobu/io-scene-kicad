@@ -1,19 +1,18 @@
-ObjectsWithDifferentOriginsWereFound: 原点の異なる複数のオブジェクトが見つかりました。
-「原点を中心とする」オプションを使用する場合、
-共通の原点を共有するオブジェクト、または、同じ親を持つオブジェクトのみを選択してください。
-
-'%s' と '%s' には異なる原点 (%g,%g,%g) と (%g,%g,%g) があります。
-そしてそれらは異なるコレクションの一部です。
-#!END!
+Help: ヘルプ
+Export: エクスポート
 CompletedOutput: %s の出力を完了しました。
+CompletedCountOutput: %d 件のファイル出力を完了しました。
+ProceededOutput: %s を出力しました。
 use_selection: 選択オブジェクトのみ
 desc_selection: 選択したオブジェクトのみをエクスポートします
 use_mesh_modifiers: モディファイアを適用
 desc_mesh_modifiers: エクスポートされたメッシュにモディファイアを適用します
-use_origin_to_center: 原点を中心とする
-desc_origin_to_center: 親メッシュの中心を (0,0,0) に変換し、子もそれに続きます
-global_mag: カラーの増幅率
-desc_global_mag: 生成されるオブジェクトのカラーを増減させて調整します
+use_worigin_to_center: ワールド原点を中心とする
+desc_worigin_to_center: ワールド原点をシンボルの原点（0,0,0）に変換し、1つのBlenderファイルが1シンボルに対応します
+fetch_children: 子オブジェクトを対象
+desc_fetch_children: 未選択の子オブジェクトも対象とします。
+color_mag: カラーの増幅率
+desc_color_mag: 生成されるオブジェクトのカラーを増減させて調整します
 desc_global_scale: Blenderでの1単位を1mmと換算してKiCadの3Dモデルを生成するためのスケールを設定します。
-初期値は、1/2.54（0.3937）です。
+初期値は、1/2.54（0.3937）です
 #!END!

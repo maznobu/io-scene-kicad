@@ -39,6 +39,7 @@ bl_info = {
 
 import os
 import re
+import webbrowser
 from . import localeui
 
 if "bpy" in locals():
@@ -63,8 +64,12 @@ from bpy_extras.io_utils import (
 @orientation_helper(axis_forward='Y', axis_up='Z')
 class ExportWRL(bpy.types.Operator, ExportHelper):
     bl_idname = "export_scene.wrl"
-    bl_label = "IO Scene KiCad"
+    bl_label = "WRLをエクスポート"
     filename_ext = ".wrl"
+
+    def checkChangeCallback(self, context):
+        o = self.use_worigin_to_center
+
     filter_glob: StringProperty(
         default="*.wrl",
         options={'HIDDEN'},
@@ -75,7 +80,14 @@ class ExportWRL(bpy.types.Operator, ExportHelper):
         description=localeui.gtext("desc_selection", "選択したオブジェクトのみをエクスポートします"),
         default=False,
     ) # type: ignore
-
+ 
+    # オプション：子オブジェクトを対象とする。初期値 True
+    fetch_children: BoolProperty(
+        name=localeui.gtext("fetch_children", "子オブジェクトを対象"),
+        description=localeui.gtext("desc_fetch_children", "未選択の子オブジェクトも対象とします"),
+        default=True,
+    ) # type: ignore
+   
     # オプション：モディファイアを適用 初期値 True
     use_mesh_modifiers: BoolProperty(
         name=localeui.gtext("use_mesh_modifiers", "モディファイアを適用"),
@@ -83,16 +95,18 @@ class ExportWRL(bpy.types.Operator, ExportHelper):
         default=True,
     ) # type: ignore
 
-    # オプション：原点を中心とする。初期値 False
-    use_origin_to_center: BoolProperty(
-        name=localeui.gtext("use_origin_to_center", "原点を中心とする"),
-        description=localeui.gtext("desc_origin_to_center", "親メッシュの中心を (0,0,0) に変換し、子もそれに続きます"),
+    # オプション：ワールド原点を中心とする。初期値 False
+    use_worigin_to_center: BoolProperty(
+        name=localeui.gtext("use_worigin_to_center", "ワールド原点を中心とする"),
+        description=localeui.gtext("desc_worigin_to_center", "ワールド原点をシンボルの原点（0,0,0）に変換し、1つのBlenderファイルが1シンボルに対応します"),
         default=False,
+        update=checkChangeCallback,
     ) # type: ignore
+
     # オプション：カラーの増幅率。初期値 1.5
-    global_mag: FloatProperty(
-        name=localeui.gtext("global_mag", "カラーの増幅率"),
-        description=localeui.gtext("desc_global_mag", "生成されるオブジェクトのカラーを増減させて調整します"),
+    color_mag: FloatProperty(
+        name=localeui.gtext("color_mag", "カラーの増幅率"),
+        description=localeui.gtext("desc_color_mag", "生成されるオブジェクトのカラーを増減させて調整します"),
         min=0.01, max=1000.0,
         default=1.5000,
     ) # type: ignore
@@ -101,7 +115,7 @@ class ExportWRL(bpy.types.Operator, ExportHelper):
         name="Scale",
         description=localeui.gtext("desc_global_scale", """\
 KiCadの3Dモデルを生成するためのスケールをBlenderでの1単位を1mmとして設定します。
-初期値は、1/2.54（0.3937）です。"""),
+初期値は、1/2.54（0.3937）です"""),
         min=0.01, max=1000.0,
         default=0.393700,
     ) # type: ignore
@@ -113,29 +127,41 @@ KiCadの3Dモデルを生成するためのスケールをBlenderでの1単位�
         keywords = {
             "filepath": self.filepath,
             "use_selection": self.use_selection,
+            "fetch_children": self.fetch_children,
             "use_mesh_modifiers": self.use_mesh_modifiers,
-            "use_origin_to_center": self.use_origin_to_center,
-            "global_mag": self.global_mag,
+            "use_worigin_to_center": self.use_worigin_to_center,
+            "color_mag": self.color_mag,
         }
-
-        global_matrix = axis_conversion(to_forward=self.axis_forward,
+        keywords["global_matrix"] = axis_conversion(to_forward=self.axis_forward,
                                         to_up=self.axis_up,
-                                        ).to_4x4() * Matrix.Scale(self.global_scale, 4)
-        keywords["global_matrix"] = global_matrix
+                                        ).to_4x4()
+        keywords["global_scale"] =  Matrix.Scale(self.global_scale, 4)
 
         return export_kicad.save(self, context, **keywords)
 
     # ------------------------------------------------------------------------------------------------
     def draw(self, context):
         layout = self.layout
+        layout.prop(self, "use_selection")
+        layout.prop(self, "fetch_children")
+        layout.prop(self, "use_mesh_modifiers")
+        layout.prop(self, "use_worigin_to_center")
+        layout.prop(self, "color_mag")
+        layout.prop(self, "axis_forward")
+        layout.prop(self, "axis_up")
+        layout.prop(self, "global_scale")
 
-        layout.prop (self, "use_selection")
-        layout.prop (self, "use_mesh_modifiers")
-        layout.prop (self, "use_origin_to_center")
-        layout.prop (self, "global_mag")
-        layout.prop (self, "axis_forward")
-        layout.prop (self, "axis_up")
-        layout.prop (self, "global_scale")
+# 
+# ================================================================================================================================
+class HelpOperation(bpy.types.Operator):
+    bl_idname = "object.help_operation"
+    bl_label = localeui.gtext("Help", "ヘルプ")
+    bl_description = "ヘルプを表示"
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        url = "file:///" + os.path.dirname(__file__) + "/README_J.html"
+        webbrowser.open_new_tab(url)
+        return {'FINISHED'}
 
 # ================================================================================================================================
 # 左側[ツール]に表示
@@ -147,7 +173,8 @@ class IOSceneKiCadTools(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         # ※textは単語であれば英字のままで日本語化される
-        layout.operator(ExportWRL.bl_idname, text = "Export")
+        layout.operator(HelpOperation.bl_idname, text = localeui.gtext("Help", "ヘルプ"))
+        layout.operator(ExportWRL.bl_idname, text = localeui.gtext("Export", "エクスポート"))
 
 # ================================================================================================================================
 # 右側のツール（Nキー）のタブに表示
@@ -162,7 +189,8 @@ class IOSceneKiCadUi(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         # ※textは単語であれば英字のままで日本語化される
-        layout.operator(ExportWRL.bl_idname, text = "Export")
+        layout.operator(HelpOperation.bl_idname, text = localeui.gtext("Help", "ヘルプ"))
+        layout.operator(ExportWRL.bl_idname, text = localeui.gtext("Export", "エクスポート"))
 
 # ================================================================================================================================
 # [プロパティ]ウィンドウの[データ]タブに表示
@@ -176,7 +204,8 @@ class IOSceneKiCadPropertyWindow(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator(ExportWRL.bl_idname, text = "エクスポート")
+        layout.operator(HelpOperation.bl_idname, text = localeui.gtext("Help", "ヘルプ"))
+        layout.operator(ExportWRL.bl_idname, text = localeui.gtext("Export", "エクスポート"))
 # ================================================================================================================================
 def menu_func(self, context):
     self.layout.operator(ExportWRL.bl_idname, text="KiCadエクスポート (.wrl)")
@@ -185,6 +214,7 @@ def menu_func(self, context):
 classes = (
 #   IOSceneKiCadTools,
     IOSceneKiCadUi,
+    HelpOperation,
 #   IOSceneKiCadPropertyWindow,
     ExportWRL,
 )

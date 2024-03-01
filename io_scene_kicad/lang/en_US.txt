@@ -1,19 +1,20 @@
-ObjectsWithDifferentOriginsWereFound: Multiple objects with different origins were found.
-When using the "Center at origin" option,
-Please select only objects that share a common origin or have the same parent.
-
-'%s' and '%s' have different origins (%g,%g,%g) and (%g,%g,%g).
-And they are part of different hierarchies.
-#!END!
+Help: Help
+Export: Export
 CompletedOutput: Completed output of %s.
+CompletedCountOutput: Completed %d file output.
+ProceededOutput: %s has been output.
+CompletedOutput: Completed output of %s.
+ProceededOutput: %s has been output.
 use_selection: Selected objects only
 desc_selection: Export only selected objects
 use_mesh_modifiers: apply modifiers
 desc_mesh_modifiers: Applies modifiers to the exported mesh
-use_origin_to_center: centered at origin
-desc_origin_to_center: Converts the center of the parent mesh to (0,0,0), followed by the child
-global_mag: Color amplification factor
-desc_global_mag: Adjust the color of the generated object by increasing or decreasing it
+use_worigin_to_center: centered at would origin
+desc_worigin_to_center: Converts the world origin to the symbol origin (0,0,0), one Blender file corresponds to one symbol
+fetch_children: Target child objects
+desc_fetch_children: It also targets unselected child objects.
+color_mag: Color amplification factor
+desc_color_mag: Adjust the color of the generated object by increasing or decreasing it
 desc_global_scale: Set the scale for generating the KiCad 3D model by converting 1 unit in Blender to 1 mm.
 The default value is 1/2.54 (0.3937).
 #!END!

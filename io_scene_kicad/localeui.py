@@ -95,11 +95,9 @@ def gtext(msgid, defmsg=None):
         # 辞書ファイル読み込み
         getdict(loc)
     # ロケーションが辞書に存在するとき
-    if loc in trans_dict:
-        # メッセージIDが辞書に存在するとき
-        if msgid in trans_dict[loc]:
-            # メッセージIDに該当する翻訳内容を取得
-            msg = trans_dict[loc][msgid]
+    if msgid in trans_dict:
+        # メッセージIDに該当する翻訳内容を取得
+        msg = trans_dict[msgid]
     # メッセージを返す
     return msg
 
