@@ -11,19 +11,19 @@
 Exporter from Blender to VRML2 file (.wrl) that can be used for KiCad.<br>
 The interface language for the script is Japanese.
 
-# リリースパッケージについて
+### リリースパッケージについて
 ---
 Blenderにインストールできるパッケージ（.zip ファイル）は、 [Releases](https://github.com/maznobu/io-scene-kicad/releases) にあります。<br>
 使用できるのはアセットにある .zip ファイルのみです。Source code (.zip | .tar.gz) は使えません（仕組みが良くわからない...）。
 
-# インストール
+### インストール
 ---
 1. Bleanderの[プリファレンス]から[アドオン]を開きます。
 2. 右上の[インストール]をクリックして、頒布された io_scene_kicad.zip を選択します。
 3. [プリファレンス]のアドオンリストの中に、[WRL(KiCad) エクスポート] が展開されると思いますので、
   チェックを入れてアドオンを有効にしてください。
 
-# 基本的な操作
+### 基本的な操作
 ---
 1. Blenderで実寸大のモデルを作成します。3mmの部品なら3mmで。
 2. 1ファイル1部品なら、ワールド原点を中心にして作成してください。フットプリントの原点と一致させるようにすると後が楽です。
@@ -38,12 +38,25 @@ Blenderにインストールできるパッケージ（.zip ファイル）は�
 10. 本アドインで生成した.wrlファイルを選択します。おそらく作成した3Dモデルが3Dビューに表示されるでしょう。位置がずれていたら調整してください。
 11. [OK]を押して編集画面を閉じ、フットプリントを保存してください。これで完了です。
 
-# 詳細な使い方など
+### 詳細な使い方など
 ---
 1. 本アドインをインストール後、UIツール (右側面のツールリスト) に [KiCad] タブが表示されます。
 2. [KiCad]タブをクリックすると、[WRL(KiCad)エクスポート]パネルが現れ、そこに[ヘルプ]ボタンがあります。<br>
    詳細な使い方は、このヘルプから参照してください。
 
+
+<br>
+<br>
+<br>
+<br>
+
+## 開発環境 (2024/3/1 現在)
+---
+* Blender 4.0.2 (Intel 64bit)
+* Visual Studio Code 1.86.2 (as of 3/1/2024)
+  * Blender Development [Experimental Fork]
+  * Japanese Language Pack for Visual Studio Code
+* Workstation (Dell Precision T7600 or T7920)
 
      
 
