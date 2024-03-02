@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
+# ================================================================================================================================
 import bpy
 import bpy_extras
 import bmesh
@@ -30,7 +30,6 @@ from . import bautils
 
 # DEBUG = False
 DEBUG = True
-
 
 # ================================================================================================================================
 class MeshExporter:

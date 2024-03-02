@@ -1,3 +1,23 @@
+# GNU GENERAL PUBLIC LICENSE
+# Version 3, 29 June 2007
+#
+# This file is part of io_scene_kicad.
+# Copyright (C) 2024  Hideki Matsunobu
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# ================================================================================================================================
 import bpy
 import mathutils
 import os
@@ -5,8 +25,8 @@ import re
 from typing import TypeVar, Sequence
 T = TypeVar('T')
 
-# DEBUG = False
-DEBUG = True
+DEBUG = False
+# DEBUG = True
 
 # マテリアルのベースカラーを取得
 # ================================================================================================================================
@@ -297,6 +317,58 @@ def isAbsSame(ary, bits, cbitmax=3):
                 cok += 1
     return cbit == cok
 
+# -a,-b,c を値毎に方向と値の列に分割
+# ================================================================================================================================
+def from_rotation(value, zeroIsSkip=True):
+    map = {}
+    count = len(value)
+    # 絶対値と符号のマップを作成
+    for i, v in enumerate(value):
+        av = abs(v)
+        if not av in map:
+            map[av] = []
+        map[av].append({ 'index': i, 'sign': -1 if v < 0 else (1 if v > 0 else 0) })
+        del i, v, av
+    # 絶対値のサム計算
+    def asum(items):
+        ans = 0
+        for item in items:
+            ans += abs(item)
+        return ans
+    # 値毎にリストを作成
+    mkall = []
+    for av, vms in map.items():
+        if DEBUG:
+            print("%r: %r" % (av, vms))
+        # 軸方向の値の展開
+        mk = []
+        for ix in range(0, count):
+            success = False
+            for vm in vms:
+                if vm['index'] != ix:
+                    continue
+                mk.append(vm['sign'])
+                success = True
+                break
+            if not success:
+                mk.append(0)
+            del ix
+        # 角度値の展開
+        mk.append(av)
+        if DEBUG:
+            print("mk: %r" % (mk))
+        # ゼロスキップしない or 絶対値合計が有効なとき
+        if not zeroIsSkip or asum(mk) != 0:
+            # リストの複製を戻り値に追加
+            mkall.append(tuple(mk[:]))
+        del av, vm, mk
+    del map
+    # 一切リストが作られなかったとき
+    if len(mkall) == 0:
+        # 空結果を作成
+        mkall = [tuple([0 for x in range(0, count)]+[0])]
+    return mkall
+
 # mathutils.Vector or mathutils.Quaternion をVRML向けタプルのリストで返す
 # ================================================================================================================================
 def from_tuples(value, defval=(0, 0, 0)):
@@ -311,74 +383,75 @@ def from_tuples(value, defval=(0, 0, 0)):
     # qua.w=cos(Θ/2)
     if type(value) is mathutils.Quaternion:
         va = value.to_euler()
-        axis = []
-        if sum(va[:]) == 0.0:
-            axis.append((0.0, 0.0, 0.0, 0.0))
-        else:
-            bits = 0
-            bits |= 0b001 if va[0] != 0.0 else 0
-            bits |= 0b010 if va[1] != 0.0 else 0
-            bits |= 0b100 if va[2] != 0.0 else 0
-            # 何れか1つしか値が無いとき
-            if bits in (1, 2, 4):
-                if bits == 1:
-                    axis.append((sign(va[0]), 0, 0, abs(va[0])))
-                elif bits == 2:
-                    axis.append((0, sign(va[1]), 0, abs(va[1])))
-                elif bits == 4:
-                    axis.append((0, 0, sign(va[2]), abs(va[2])))
-                pass
-            # 値が2つ存在するとき
-            elif bits in (3,5,6):
-                # 要素[0]と[1]に値が存在するとき
-                if bits == 0b011:
-                    # 絶対値が同じとき
-                    if isAbsSame(va, 0b011):
+        axis = from_rotation(va)
+        if False:
+            if sum(va[:]) == 0.0:
+                axis.append((0.0, 0.0, 0.0, 0.0))
+            else:
+                bits = 0
+                bits |= 0b001 if va[0] != 0.0 else 0
+                bits |= 0b010 if va[1] != 0.0 else 0
+                bits |= 0b100 if va[2] != 0.0 else 0
+                # 何れか1つしか値が無いとき
+                if bits in (1, 2, 4):
+                    if bits == 1:
+                        axis.append((sign(va[0]), 0, 0, abs(va[0])))
+                    elif bits == 2:
+                        axis.append((0, sign(va[1]), 0, abs(va[1])))
+                    elif bits == 4:
+                        axis.append((0, 0, sign(va[2]), abs(va[2])))
+                    pass
+                # 値が2つ存在するとき
+                elif bits in (3,5,6):
+                    # 要素[0]と[1]に値が存在するとき
+                    if bits == 0b011:
+                        # 絶対値が同じとき
+                        if isAbsSame(va, 0b011):
+                            axis.append((sign(va[0]), sign(va[1]), 0, abs(va[0])))
+                        # 絶対値が異なるとき
+                        else:
+                            axis.append((sign(va[0]), 0, 0, abs(va[0])))
+                            axis.append((0, sign(va[1]), 0, abs(va[1])))
+                    # 要素[0]と[2]に値が存在するとき
+                    elif bits == 0b101:
+                        # 絶対値が同じとき
+                        if isAbsSame(va, 0b101):
+                            axis.append((sign(va[0]), 0, sign(va[2]), abs(va[0])))
+                        # 絶対値が異なるとき
+                        else:
+                            axis.append((sign(va[0]), 0, 0, abs(va[0])))
+                            axis.append((0, 0, sign(va[2]), abs(va[2])))
+                    # 要素[0]と[1]に値が存在するとき
+                    elif bits == 0b110:
+                        # 絶対値が同じとき
+                        if isAbsSame(va, 0b110):
+                            axis.append((sign(va[1]), 0, sign(va[2]), abs(va[1])))
+                        # 絶対値が異なるとき
+                        else:
+                            axis.append((0, sign(va[1]), 0, abs(va[1])))
+                            axis.append((0, 0, sign(va[2]), abs(va[2])))
+                # 値が3つ存在するとき
+                elif bits in (7):
+                    # 3要素共に絶対値が同じとき
+                    if isAbsSame(va, 0b111):
+                        axis.append((sign(va[0]), sign(va[1]), sign(va[2]), abs(va[0])))
+                    # 要素[0]と[1]に値が存在するとき
+                    elif isAbsSame(va, 0b011):
                         axis.append((sign(va[0]), sign(va[1]), 0, abs(va[0])))
-                    # 絶対値が異なるとき
-                    else:
+                        axis.append((0, 0, sign(va[2]), abs(va[2])))
+                    # 要素[1]と[2]に値が存在するとき
+                    elif isAbsSame(va, 0b110):
+                        axis.append((0, sign(va[1]), sign(va[2]), abs(va[1])))
                         axis.append((sign(va[0]), 0, 0, abs(va[0])))
-                        axis.append((0, sign(va[1]), 0, abs(va[1])))
-                # 要素[0]と[2]に値が存在するとき
-                elif bits == 0b101:
-                    # 絶対値が同じとき
-                    if isAbsSame(va, 0b101):
+                    # 要素[0]と[2]に値が存在するとき
+                    elif isAbsSame(va, 0b101):
                         axis.append((sign(va[0]), 0, sign(va[2]), abs(va[0])))
-                    # 絶対値が異なるとき
+                        axis.append((0, sign(va[1]), 0, abs(va[1])))
+                    # 何れの要素も絶対値が異なるとき
                     else:
                         axis.append((sign(va[0]), 0, 0, abs(va[0])))
-                        axis.append((0, 0, sign(va[2]), abs(va[2])))
-                # 要素[0]と[1]に値が存在するとき
-                elif bits == 0b110:
-                    # 絶対値が同じとき
-                    if isAbsSame(va, 0b110):
-                        axis.append((sign(va[1]), 0, sign(va[2]), abs(va[1])))
-                    # 絶対値が異なるとき
-                    else:
                         axis.append((0, sign(va[1]), 0, abs(va[1])))
                         axis.append((0, 0, sign(va[2]), abs(va[2])))
-            # 値が3つ存在するとき
-            elif bits in (7):
-                # 3要素共に絶対値が同じとき
-                if isAbsSame(va, 0b111):
-                    axis.append((sign(va[0]), sign(va[1]), sign(va[2]), abs(va[0])))
-                # 要素[0]と[1]に値が存在するとき
-                elif isAbsSame(va, 0b011):
-                    axis.append((sign(va[0]), sign(va[1]), 0, abs(va[0])))
-                    axis.append((0, 0, sign(va[2]), abs(va[2])))
-                # 要素[1]と[2]に値が存在するとき
-                elif isAbsSame(va, 0b110):
-                    axis.append((0, sign(va[1]), sign(va[2]), abs(va[1])))
-                    axis.append((sign(va[0]), 0, 0, abs(va[0])))
-                # 要素[0]と[2]に値が存在するとき
-                elif isAbsSame(va, 0b101):
-                    axis.append((sign(va[0]), 0, sign(va[2]), abs(va[0])))
-                    axis.append((0, sign(va[1]), 0, abs(va[1])))
-                # 何れの要素も絶対値が異なるとき
-                else:
-                    axis.append((sign(va[0]), 0, 0, abs(va[0])))
-                    axis.append((0, sign(va[1]), 0, abs(va[1])))
-                    axis.append((0, 0, sign(va[2]), abs(va[2])))
     if type(value) is mathutils.Vector:
         axis = [tuple(value)]
     return axis
