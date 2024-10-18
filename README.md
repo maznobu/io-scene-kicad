@@ -12,7 +12,6 @@
 ---
 
 Blenderにインストールできるパッケージ（.zip ファイル）は、 [Releases](https://github.com/maznobu/io-scene-kicad/releases) にあります。<br>
-使用できるのはアセットにある .zip ファイルのみです。Source code (.zip | .tar.gz) は使えません（仕組みが良くわからない...）。
 <br>
 <br>
 
